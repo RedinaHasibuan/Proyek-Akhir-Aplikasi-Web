@@ -1,0 +1,22 @@
+﻿# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+.venv/
+venv/
+
+# Dataset hasil crawling
+puitika/data/raw/
+puitika/data/clean/
+
+# Environment dan informasi rahasia
+.env
+.env.*
+!.env.example
+
+# Editor dan sistem operasi
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
