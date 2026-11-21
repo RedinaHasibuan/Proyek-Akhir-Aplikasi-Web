@@ -1,2 +1,6 @@
-requests>=2.31
+﻿requests>=2.31
 PyMySQL>=1.1
+scikit-learn>=1.3
+numpy>=1.24
+# Opsional untuk stemming:
+# Sastrawi>=1.0

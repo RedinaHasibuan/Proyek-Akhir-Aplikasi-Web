@@ -42,8 +42,11 @@ CREATE TABLE IF NOT EXISTS poems (
   CONSTRAINT fk_poems_poet FOREIGN KEY (poet_id) REFERENCES poets(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Label tema/emosi. Satu puisi boleh punya banyak baris (emosi multi-label).
--- source: 'manual' = dilabeli sendiri, 'model' = prediksi sistem, 'user' = koreksi penulis.
+-- Label tema utama dan anotasi emosi historis/eksperimen.
+-- Model utama aplikasi hanya menghasilkan label_type='tema'.
+-- Baris label_type='emosi' dari eksperimen lama dipertahankan untuk dokumentasi,
+-- bukan dipakai sebagai klasifikasi produksi. Sentiment polarity disimpan terpisah.
+-- source: 'manual' = anotasi, 'model' = prediksi sistem, 'user' = koreksi penulis.
 CREATE TABLE IF NOT EXISTS poem_labels (
   id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
   poem_id     INT UNSIGNED NOT NULL,
@@ -56,4 +59,29 @@ CREATE TABLE IF NOT EXISTS poem_labels (
   UNIQUE KEY uq_label (poem_id, label_type, label, source),
   KEY idx_label_lookup (label_type, label),
   CONSTRAINT fk_labels_poem FOREIGN KEY (poem_id) REFERENCES poems(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Hasil sentiment analysis untuk fitur Makna Puisi.
+-- poem_id boleh NULL untuk teks yang dianalisis sementara dan tidak disimpan sebagai puisi.
+-- Jangan menyimpan teks puisi privat mentah di tabel ini; simpan hasil analisis saja.
+CREATE TABLE IF NOT EXISTS poem_sentiment_analyses (
+  id                   INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  poem_id              INT UNSIGNED NULL,
+  method               ENUM('lexicon','supervised') NOT NULL DEFAULT 'lexicon',
+  polarity             ENUM('positif','negatif','netral','campuran','tidak_terdeteksi') NOT NULL,
+  score                 DECIMAL(7,4) NOT NULL DEFAULT 0.0000,
+  positive_score       DECIMAL(8,4) NOT NULL DEFAULT 0.0000,
+  negative_score       DECIMAL(8,4) NOT NULL DEFAULT 0.0000,
+  token_count           INT UNSIGNED NOT NULL DEFAULT 0,
+  matched_token_count   INT UNSIGNED NOT NULL DEFAULT 0,
+  positive_terms        TEXT NULL,
+  negative_terms        TEXT NULL,
+  analyzer_version      VARCHAR(60) NOT NULL DEFAULT 'lexicon-id-puisi-0.1',
+  created_at            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_sentiment_poem (poem_id),
+  KEY idx_sentiment_polarity (polarity),
+  KEY idx_sentiment_method (method),
+  CONSTRAINT fk_sentiment_poem FOREIGN KEY (poem_id)
+    REFERENCES poems(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

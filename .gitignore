@@ -4,19 +4,20 @@ __pycache__/
 
 # Virtual environment
 .venv/
-venv/
+puitika/.venv/
 
-# Dataset hasil crawling
-puitika/data/raw/
-puitika/data/clean/
+# Dataset lokal
+puitika/data/
 
-# Environment dan informasi rahasia
+# Model dan laporan hasil eksperimen
+puitika/models/
+puitika/reports/
+
+# Environment variables
 .env
 .env.*
 !.env.example
 
-# Editor dan sistem operasi
+# Editor
 .vscode/
 .idea/
-.DS_Store
-Thumbs.db
