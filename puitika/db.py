@@ -1,3 +1,4 @@
+
 """Lapisan akses database yang tipis.
 
 MySQL dipakai untuk aplikasi sungguhan (pengaturan dari config.py / environment variable).
@@ -5,6 +6,7 @@ SQLite HANYA untuk uji otomatis (test_backend.py); skema SQLite dibuat di file u
 Semua SQL di proyek ini memakai placeholder %s; untuk SQLite diganti ke ? secara otomatis,
 jadi SQL harus tetap portabel (tanpa fitur khusus MySQL) dan tanpa tanda % di dalam teks SQL.
 """
+
 import sqlite3
 from contextlib import contextmanager
 
@@ -32,6 +34,11 @@ class _Cursor:
     def rowcount(self):
         return self._cur.rowcount
 
+    @property
+    def lastrowid(self):
+        """ID dari baris terakhir yang berhasil ditambahkan."""
+        return self._cur.lastrowid
+
 
 class Database:
     def __init__(self, kind="mysql", sqlite_path=None):
@@ -54,6 +61,7 @@ class Database:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA foreign_keys = ON")
             return conn
+
         import pymysql  # diimpor di sini agar uji SQLite tidak butuh PyMySQL
 
         return pymysql.connect(
@@ -89,19 +97,59 @@ def ensure_schema(db):
     """
     if db.kind != "mysql":
         return False
+
     with db.cursor(commit=True) as cur:
         t = cur.execute(
-            "SELECT COUNT(*) AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = %s AND TABLE_NAME = 'poem_labels'",
+            "SELECT COUNT(*) AS n FROM information_schema.TABLES "
+            "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = 'poem_labels'",
             (config.DB_NAME,),
         ).one()
+
         if not t["n"]:
-            raise RuntimeError("Tabel poem_labels belum ada. Jalankan dulu: python load_to_db.py --init")
+            raise RuntimeError(
+                "Tabel poem_labels belum ada. Jalankan dulu: python load_to_db.py --init"
+            )
+
         c = cur.execute(
-            "SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = %s "
+            "SELECT COUNT(*) AS n FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = %s "
             "AND TABLE_NAME = 'poem_labels' AND COLUMN_NAME = 'is_primary'",
             (config.DB_NAME,),
         ).one()
+
         if c["n"]:
             return False
-        cur.execute("ALTER TABLE poem_labels ADD COLUMN is_primary TINYINT(1) NOT NULL DEFAULT 1 AFTER label")
+
+        cur.execute(
+            "ALTER TABLE poem_labels "
+            "ADD COLUMN is_primary TINYINT(1) NOT NULL DEFAULT 1 AFTER label"
+        )
         return True
+
+
+def apply_sql_file(db, path):
+    """Menjalankan file SQL sederhana yang berisi beberapa pernyataan.
+
+    Pernyataan dipisahkan berdasarkan titik koma (;).
+    Baris komentar yang diawali tanda -- akan dilewati.
+    """
+    with open(path, encoding="utf-8") as f:
+        lines = [
+            line
+            for line in f.read().splitlines()
+            if not line.strip().startswith("--")
+        ]
+
+    sql_text = "\n".join(lines)
+
+    statements = [
+        statement.strip()
+        for statement in sql_text.split(";")
+        if statement.strip()
+    ]
+
+    with db.cursor(commit=True) as cur:
+        for statement in statements:
+            cur.execute(statement)
+
+    return len(statements)

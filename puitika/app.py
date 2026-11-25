@@ -1,4 +1,3 @@
-
 """API utama Puitika menggunakan Flask.
 
 Jalankan:
@@ -7,30 +6,49 @@ Jalankan:
 Alamat:
     http://127.0.0.1:5000/api/health
 
-Endpoint:
-    GET  /api/health
-    GET  /api/filters
-    GET  /api/poets
-    GET  /api/poems
-    GET  /api/poems/<id>
-    GET  /api/poems/<id>/analysis
-    POST /api/analyze
+Endpoint utama:
+    GET    /api/health
+    GET    /api/filters
+    GET    /api/poets
+    GET    /api/poems
+    GET    /api/poems/<id>
+    GET    /api/poems/<id>/analysis
+    POST   /api/analyze
 
 Ruang Diksi:
-    GET  /api/diksi/words
-    GET  /api/diksi/words/<kata>
-    POST /api/diksi/search
-    POST /api/diksi/chat
+    GET    /api/diksi/words
+    GET    /api/diksi/words/<kata>
+    POST   /api/diksi/search
+    POST   /api/diksi/chat
 
-Hanya puisi in_public_library = 1 yang dapat diakses melalui
-endpoint perpustakaan.
+Makna Puisi:
+    POST   /api/makna
+    GET    /api/poems/<id>/makna
+
+Studio Puisi:
+    GET    /api/drafts
+    POST   /api/drafts
+    GET    /api/drafts/<id>
+    PUT    /api/drafts/<id>
+    PATCH  /api/drafts/<id>
+    DELETE /api/drafts/<id>
+    POST   /api/studio/rekomendasi
+
+Hanya puisi dengan in_public_library = 1 yang dapat diakses melalui
+endpoint Perpustakaan. Draf Studio disimpan terpisah dan tidak menjadi
+puisi publik.
+
+Catatan:
+    - Tabel drafts dibuat otomatis saat aplikasi dibuat (MySQL).
+    - Endpoint draf belum memiliki autentikasi/pemisahan pemilik. Gunakan
+      untuk pengembangan lokal atau demonstrasi, bukan deployment publik
+      sebelum menambahkan autentikasi dan otorisasi.
 
 Environment variable opsional:
     PUITIKA_CORS_ORIGIN
     PUITIKA_DEBUG=1
 """
 
-import makna_api
 import logging
 import os
 
@@ -41,23 +59,20 @@ import analysis
 import config
 import diksi_api
 import diksi_repo
+import makna_api
 import predict
 import repo
+import studio
+import studio_api
 
+from apiutil import ApiError, choice_arg, int_arg, q_arg
 from db import Database
-from apiutil import (
-    ApiError,
-    choice_arg,
-    int_arg,
-    q_arg,
-)
-
 from labels import TEMA, TEMA_LIST
 
 
-# ---------------------------------------------------------
+# ---------------------------------------------------------------------
 # KONFIGURASI APLIKASI
-# ---------------------------------------------------------
+# ---------------------------------------------------------------------
 
 MAX_PER_PAGE = 50
 DEFAULT_PER_PAGE = 12
@@ -66,12 +81,11 @@ MAX_TEXT = analysis.MAX_CHARS
 log = logging.getLogger("puitika")
 
 
-# ---------------------------------------------------------
+# ---------------------------------------------------------------------
 # MEMBUAT APLIKASI FLASK
-# ---------------------------------------------------------
+# ---------------------------------------------------------------------
 
 def create_app(db=None, model_dir=None):
-
     app = Flask(__name__)
 
     app.json.ensure_ascii = False
@@ -84,10 +98,21 @@ def create_app(db=None, model_dir=None):
     def _db():
         return app.config["DB"]
 
-    # -----------------------------------------------------
-    # CORS UNTUK FRONTEND
-    # -----------------------------------------------------
+    # -----------------------------------------------------------------
+    # SIAPKAN TABEL STUDIO PUISI
+    # -----------------------------------------------------------------
+    # Aman diulang karena studio_schema.sql menggunakan CREATE TABLE IF NOT EXISTS.
+    # Untuk SQLite, studio.ensure_tables() tidak melakukan perubahan.
+    # Jika MySQL belum tersedia, server tetap dapat dibuat; endpoint yang
+    # memerlukan database akan mengembalikan error yang sesuai saat dipanggil.
+    try:
+        studio.ensure_tables(_db())
+    except Exception as e:
+        log.warning("Tabel Studio Puisi belum dapat disiapkan: %s", e)
 
+    # -----------------------------------------------------------------
+    # CORS UNTUK FRONTEND
+    # -----------------------------------------------------------------
     cors = os.environ.get("PUITIKA_CORS_ORIGIN")
 
     if cors:
@@ -96,13 +121,14 @@ def create_app(db=None, model_dir=None):
         def _cors(resp):
             resp.headers["Access-Control-Allow-Origin"] = cors
             resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
-            resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            resp.headers["Access-Control-Allow-Methods"] = (
+                "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+            )
             return resp
 
-    # -----------------------------------------------------
+    # -----------------------------------------------------------------
     # PENANGANAN ERROR
-    # -----------------------------------------------------
-
+    # -----------------------------------------------------------------
     @app.errorhandler(ApiError)
     def _api_error(e):
         return jsonify(error=e.message), e.status
@@ -113,63 +139,42 @@ def create_app(db=None, model_dir=None):
 
     @app.errorhandler(405)
     def _405(_):
-        return jsonify(
-            error="Metode tidak diizinkan untuk alamat ini."
-        ), 405
+        return jsonify(error="Metode tidak diizinkan untuk alamat ini."), 405
 
     @app.errorhandler(413)
     def _413(_):
-        return jsonify(
-            error="Permintaan terlalu besar (maksimal 64 KB)."
-        ), 413
+        return jsonify(error="Permintaan terlalu besar (maksimal 64 KB)."), 413
 
     @app.errorhandler(Exception)
     def _500(e):
-
         if isinstance(e, HTTPException):
             return jsonify(error=e.description), e.code
 
         log.exception("Kesalahan tak terduga: %s", e)
+        return jsonify(error="Terjadi kesalahan di server."), 500
 
-        return jsonify(
-            error="Terjadi kesalahan di server."
-        ), 500
-
-    # =====================================================
+    # =================================================================
     # BAGIAN 1: STATUS APLIKASI
-    # =====================================================
-
+    # =================================================================
     @app.get("/api/health")
     def health():
-
-        model_dir = app.config["MODEL_DIR"]
+        model_dir_now = app.config["MODEL_DIR"]
         models = {}
 
         # Periksa model klasifikasi tema.
         for name in predict.TARGETS:
-
             try:
-                meta = predict.model_meta(name, model_dir)
-
+                meta = predict.model_meta(name, model_dir_now)
             except Exception as e:
-                log.warning(
-                    "Pemeriksaan model %s gagal: %s",
-                    name,
-                    e,
-                )
-
+                log.warning("Pemeriksaan model %s gagal: %s", name, e)
                 models[name] = {
                     "tersedia": False,
                     "error": "gagal dimuat",
                 }
-
                 continue
 
             if meta is None:
-                models[name] = {
-                    "tersedia": False,
-                }
-
+                models[name] = {"tersedia": False}
             else:
                 models[name] = {
                     "tersedia": True,
@@ -181,32 +186,23 @@ def create_app(db=None, model_dir=None):
         try:
             with _db().cursor() as cur:
                 cur.execute("SELECT 1 AS ok").one()
-
             db_ok = True
-
         except Exception as e:
             log.warning("Cek database gagal: %s", e)
             db_ok = False
 
         # Periksa ketersediaan kamus diksi.
         # Jika tabel belum tersedia, server utama tetap berjalan.
-        diksi = {
-            "tersedia": False,
-        }
+        diksi = {"tersedia": False}
 
         if db_ok:
-
             try:
                 diksi = {
                     "tersedia": True,
                     "n_entri": diksi_repo.count_entries(_db()),
                 }
-
             except Exception as e:
-                log.info(
-                    "Data Ruang Diksi belum tersedia: %s",
-                    e,
-                )
+                log.info("Data Ruang Diksi belum tersedia: %s", e)
 
         return jsonify(
             status="ok" if db_ok else "database_error",
@@ -215,13 +211,11 @@ def create_app(db=None, model_dir=None):
             diksi=diksi,
         ), (200 if db_ok else 503)
 
-    # =====================================================
+    # =================================================================
     # BAGIAN 2: PERPUSTAKAAN PUISI
-    # =====================================================
-
+    # =================================================================
     @app.get("/api/filters")
     def filters():
-
         data = repo.filter_counts(_db())
 
         # Tambahkan deskripsi tema.
@@ -230,13 +224,11 @@ def create_app(db=None, model_dir=None):
 
         return jsonify(data)
 
-    # -----------------------------------------------------
+    # -----------------------------------------------------------------
     # DAFTAR PENYAIR
-    # -----------------------------------------------------
-
+    # -----------------------------------------------------------------
     @app.get("/api/poets")
     def poets():
-
         limit = int_arg(
             "limit",
             50,
@@ -253,13 +245,11 @@ def create_app(db=None, model_dir=None):
             )
         )
 
-    # -----------------------------------------------------
+    # -----------------------------------------------------------------
     # DAFTAR PUISI
-    # -----------------------------------------------------
-
+    # -----------------------------------------------------------------
     @app.get("/api/poems")
     def poems():
-
         page = int_arg(
             "page",
             1,
@@ -286,10 +276,7 @@ def create_app(db=None, model_dir=None):
             TEMA_LIST,
         )
 
-        sort = (
-            choice_arg("sort", list(repo.SORTS))
-            or "title"
-        )
+        sort = choice_arg("sort", list(repo.SORTS)) or "title"
 
         return jsonify(
             repo.list_poems(
@@ -303,43 +290,27 @@ def create_app(db=None, model_dir=None):
             )
         )
 
-    # -----------------------------------------------------
+    # -----------------------------------------------------------------
     # DETAIL PUISI
-    # -----------------------------------------------------
-
+    # -----------------------------------------------------------------
     @app.get("/api/poems/<int:poem_id>")
     def poem(poem_id):
-
-        result = repo.get_poem(
-            _db(),
-            poem_id,
-        )
+        result = repo.get_poem(_db(), poem_id)
 
         if result is None:
-            raise ApiError(
-                404,
-                "Puisi tidak ditemukan.",
-            )
+            raise ApiError(404, "Puisi tidak ditemukan.")
 
         return jsonify(result)
 
-    # -----------------------------------------------------
-    # ANALISIS PUISI DARI PERPUSTAKAAN
-    # -----------------------------------------------------
-
+    # -----------------------------------------------------------------
+    # ANALISIS PUISI DARI PERPUSTAKAAN (ANALISIS UMUM)
+    # -----------------------------------------------------------------
     @app.get("/api/poems/<int:poem_id>/analysis")
     def poem_analysis(poem_id):
-
-        poem_data = repo.get_poem(
-            _db(),
-            poem_id,
-        )
+        poem_data = repo.get_poem(_db(), poem_id)
 
         if poem_data is None:
-            raise ApiError(
-                404,
-                "Puisi tidak ditemukan.",
-            )
+            raise ApiError(404, "Puisi tidak ditemukan.")
 
         result = analysis.analyze(
             poem_data["body"],
@@ -356,13 +327,11 @@ def create_app(db=None, model_dir=None):
 
         return jsonify(result)
 
-    # -----------------------------------------------------
-    # ANALISIS TEKS BARU DARI STUDIO PUISI
-    # -----------------------------------------------------
-
+    # -----------------------------------------------------------------
+    # ANALISIS TEKS BARU (UNTUK STUDIO / EDITOR)
+    # -----------------------------------------------------------------
     @app.post("/api/analyze")
     def analyze():
-
         payload = request.get_json(silent=True)
 
         if (
@@ -371,28 +340,21 @@ def create_app(db=None, model_dir=None):
         ):
             raise ApiError(
                 400,
-                'Kirim JSON berbentuk {"text": "..."} .',
+                'Kirim JSON berbentuk {"text": "..."}.',
             )
 
         text = payload["text"].strip()
 
         if not text:
-            raise ApiError(
-                400,
-                "Teks puisi kosong.",
-            )
+            raise ApiError(400, "Teks puisi kosong.")
 
         if len(text) > MAX_TEXT:
             raise ApiError(
                 400,
-                f"Teks terlalu panjang "
-                f"(maksimal {MAX_TEXT} karakter).",
+                f"Teks terlalu panjang (maksimal {MAX_TEXT} karakter).",
             )
 
-        if not analysis.tokenize(
-            text,
-            stopwords=False,
-        ):
+        if not analysis.tokenize(text, stopwords=False):
             raise ApiError(
                 400,
                 "Teks tidak mengandung kata yang bisa dianalisis.",
@@ -413,32 +375,26 @@ def create_app(db=None, model_dir=None):
 
         return jsonify(result)
 
-    # =====================================================
-    # BAGIAN 3: RUANG DIKSI
-    # =====================================================
-
-    # Endpoint berikut didaftarkan dari diksi_api.py.
-    # ApiError menggunakan kelas yang sama dengan API utama.
-
+    # =================================================================
+    # BAGIAN 3: PENDAFTARAN MODUL API
+    # =================================================================
+    # Ruang Diksi: pencarian kosakata dan chatbot Teman Diksi.
     diksi_api.register(app)
+
+    # Makna Puisi: interpretasi ringan, diksi penting, dan sentimen.
     makna_api.register(app)
 
-    # -----------------------------------------------------
-    # SELESAI
-    # -----------------------------------------------------
+    # Studio Puisi: CRUD draf dan rekomendasi tema/diksi.
+    studio_api.register(app)
 
     return app
 
 
-# ---------------------------------------------------------
+# ---------------------------------------------------------------------
 # MENJALANKAN SERVER
-# ---------------------------------------------------------
-
+# ---------------------------------------------------------------------
 if __name__ == "__main__":
-
-    logging.basicConfig(
-        level=logging.INFO,
-    )
+    logging.basicConfig(level=logging.INFO)
 
     create_app().run(
         host="127.0.0.1",

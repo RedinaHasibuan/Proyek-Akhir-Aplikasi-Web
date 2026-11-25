@@ -71,6 +71,13 @@ def all_entries(db):
         return cur.execute(f"SELECT {_COLS} FROM dictionary_entries ORDER BY word_key ASC").all()
 
 
+def word_keys(db):
+    """Ambil himpunan kata kamus dalam bentuk normalisasi untuk pencocokan token."""
+    with db.cursor() as cur:
+        rows = cur.execute("SELECT word FROM dictionary_entries").all()
+    return {word_key(row["word"]) for row in rows}
+
+
 def count_entries(db):
     with db.cursor() as cur:
         return cur.execute("SELECT COUNT(*) AS n FROM dictionary_entries").one()["n"]
