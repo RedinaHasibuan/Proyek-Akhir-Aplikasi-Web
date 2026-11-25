@@ -30,6 +30,7 @@ Environment variable opsional:
     PUITIKA_DEBUG=1
 """
 
+import makna_api
 import logging
 import os
 
@@ -420,6 +421,7 @@ def create_app(db=None, model_dir=None):
     # ApiError menggunakan kelas yang sama dengan API utama.
 
     diksi_api.register(app)
+    makna_api.register(app)
 
     # -----------------------------------------------------
     # SELESAI
