@@ -1,11 +1,33 @@
 
-"""API Puitika menggunakan Flask.
+"""API utama Puitika menggunakan Flask.
 
 Jalankan:
     python app.py
 
 Alamat:
     http://127.0.0.1:5000/api/health
+
+Endpoint:
+    GET  /api/health
+    GET  /api/filters
+    GET  /api/poets
+    GET  /api/poems
+    GET  /api/poems/<id>
+    GET  /api/poems/<id>/analysis
+    POST /api/analyze
+
+Ruang Diksi:
+    GET  /api/diksi/words
+    GET  /api/diksi/words/<kata>
+    POST /api/diksi/search
+    POST /api/diksi/chat
+
+Hanya puisi in_public_library = 1 yang dapat diakses melalui
+endpoint perpustakaan.
+
+Environment variable opsional:
+    PUITIKA_CORS_ORIGIN
+    PUITIKA_DEBUG=1
 """
 
 import logging
@@ -16,12 +38,26 @@ from werkzeug.exceptions import HTTPException
 
 import analysis
 import config
+import diksi_api
+import diksi_repo
 import predict
 import repo
+
 from db import Database
+from apiutil import (
+    ApiError,
+    choice_arg,
+    int_arg,
+    q_arg,
+)
+
 from labels import TEMA, TEMA_LIST
 
-MAX_Q = 100
+
+# ---------------------------------------------------------
+# KONFIGURASI APLIKASI
+# ---------------------------------------------------------
+
 MAX_PER_PAGE = 50
 DEFAULT_PER_PAGE = 12
 MAX_TEXT = analysis.MAX_CHARS
@@ -29,78 +65,27 @@ MAX_TEXT = analysis.MAX_CHARS
 log = logging.getLogger("puitika")
 
 
-class ApiError(Exception):
-    def __init__(self, status, message):
-        super().__init__(message)
-        self.status = status
-        self.message = message
-
-
-def _int_arg(name, default, lo, hi=None, clamp=False):
-    raw = request.args.get(name)
-
-    if raw is None or raw == "":
-        return default
-
-    try:
-        value = int(raw)
-    except ValueError:
-        raise ApiError(
-            400,
-            f"Parameter '{name}' harus bilangan bulat."
-        )
-
-    if value < lo:
-        raise ApiError(400, f"Parameter '{name}' minimal {lo}.")
-
-    if hi is not None and value > hi:
-        if clamp:
-            return hi
-        raise ApiError(400, f"Parameter '{name}' maksimal {hi}.")
-
-    return value
-
-
-def _choice_arg(name, valid):
-    value = request.args.get(name)
-
-    if value is None or value == "":
-        return None
-
-    if value not in valid:
-        raise ApiError(
-            400,
-            f"Parameter '{name}' tidak valid. "
-            f"Pilihan: {', '.join(valid)}."
-        )
-
-    return value
-
-
-def _q_arg():
-    q = (request.args.get("q") or "").strip()
-
-    if len(q) > MAX_Q:
-        raise ApiError(
-            400,
-            f"Parameter 'q' maksimal {MAX_Q} karakter."
-        )
-
-    return q or None
-
+# ---------------------------------------------------------
+# MEMBUAT APLIKASI FLASK
+# ---------------------------------------------------------
 
 def create_app(db=None, model_dir=None):
+
     app = Flask(__name__)
 
     app.json.ensure_ascii = False
     app.json.sort_keys = False
-    app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
 
+    app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
     app.config["DB"] = db or Database.mysql()
     app.config["MODEL_DIR"] = model_dir or config.MODEL_DIR
 
     def _db():
         return app.config["DB"]
+
+    # -----------------------------------------------------
+    # CORS UNTUK FRONTEND
+    # -----------------------------------------------------
 
     cors = os.environ.get("PUITIKA_CORS_ORIGIN")
 
@@ -113,9 +98,9 @@ def create_app(db=None, model_dir=None):
             resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
             return resp
 
-    # --------------------------------------------------
+    # -----------------------------------------------------
     # PENANGANAN ERROR
-    # --------------------------------------------------
+    # -----------------------------------------------------
 
     @app.errorhandler(ApiError)
     def _api_error(e):
@@ -127,36 +112,71 @@ def create_app(db=None, model_dir=None):
 
     @app.errorhandler(405)
     def _405(_):
-        return jsonify(error="Metode tidak diizinkan untuk alamat ini."), 405
+        return jsonify(
+            error="Metode tidak diizinkan untuk alamat ini."
+        ), 405
 
     @app.errorhandler(413)
     def _413(_):
-        return jsonify(error="Permintaan terlalu besar (maksimal 64 KB)."), 413
+        return jsonify(
+            error="Permintaan terlalu besar (maksimal 64 KB)."
+        ), 413
 
     @app.errorhandler(Exception)
     def _500(e):
+
         if isinstance(e, HTTPException):
             return jsonify(error=e.description), e.code
 
         log.exception("Kesalahan tak terduga: %s", e)
 
-        return jsonify(error="Terjadi kesalahan di server."), 500
+        return jsonify(
+            error="Terjadi kesalahan di server."
+        ), 500
+
+    # =====================================================
+    # BAGIAN 1: STATUS APLIKASI
+    # =====================================================
+
     @app.get("/api/health")
     def health():
+
         model_dir = app.config["MODEL_DIR"]
+        models = {}
 
-        # Periksa ketersediaan model tema
-        model_path = os.path.join(model_dir, "tema.joblib")
+        # Periksa model klasifikasi tema.
+        for name in predict.TARGETS:
 
-        if os.path.isfile(model_path):
-            model = {"tersedia": True}
-        else:
-            model = {
-                "tersedia": False,
-                "error": "Model tema belum tersedia. Jalankan train_model.py."
-            }
+            try:
+                meta = predict.model_meta(name, model_dir)
 
-        # Periksa koneksi database
+            except Exception as e:
+                log.warning(
+                    "Pemeriksaan model %s gagal: %s",
+                    name,
+                    e,
+                )
+
+                models[name] = {
+                    "tersedia": False,
+                    "error": "gagal dimuat",
+                }
+
+                continue
+
+            if meta is None:
+                models[name] = {
+                    "tersedia": False,
+                }
+
+            else:
+                models[name] = {
+                    "tersedia": True,
+                    "n_train": meta.get("n_train"),
+                    "cv_macro_f1": meta.get("cv_macro_f1"),
+                }
+
+        # Periksa koneksi database utama.
         try:
             with _db().cursor() as cur:
                 cur.execute("SELECT 1 AS ok").one()
@@ -167,51 +187,86 @@ def create_app(db=None, model_dir=None):
             log.warning("Cek database gagal: %s", e)
             db_ok = False
 
+        # Periksa ketersediaan kamus diksi.
+        # Jika tabel belum tersedia, server utama tetap berjalan.
+        diksi = {
+            "tersedia": False,
+        }
+
+        if db_ok:
+
+            try:
+                diksi = {
+                    "tersedia": True,
+                    "n_entri": diksi_repo.count_entries(_db()),
+                }
+
+            except Exception as e:
+                log.info(
+                    "Data Ruang Diksi belum tersedia: %s",
+                    e,
+                )
+
         return jsonify(
             status="ok" if db_ok else "database_error",
             database=db_ok,
-            model={"tema": model},
+            model=models,
+            diksi=diksi,
         ), (200 if db_ok else 503)
 
-
-    # --------------------------------------------------
-    # FILTER TEMA
-    # --------------------------------------------------
+    # =====================================================
+    # BAGIAN 2: PERPUSTAKAAN PUISI
+    # =====================================================
 
     @app.get("/api/filters")
     def filters():
+
         data = repo.filter_counts(_db())
 
+        # Tambahkan deskripsi tema.
         for item in data["tema"]:
             item["deskripsi"] = TEMA[item["label"]]
 
         return jsonify(data)
 
-    # --------------------------------------------------
+    # -----------------------------------------------------
     # DAFTAR PENYAIR
-    # --------------------------------------------------
+    # -----------------------------------------------------
 
     @app.get("/api/poets")
     def poets():
-        limit = _int_arg("limit", 50, 1, 200, clamp=True)
+
+        limit = int_arg(
+            "limit",
+            50,
+            1,
+            200,
+            clamp=True,
+        )
 
         return jsonify(
             items=repo.list_poets(
                 _db(),
-                q=_q_arg(),
+                q=q_arg(),
                 limit=limit,
             )
         )
 
-    # --------------------------------------------------
+    # -----------------------------------------------------
     # DAFTAR PUISI
-    # --------------------------------------------------
+    # -----------------------------------------------------
 
     @app.get("/api/poems")
     def poems():
-        page = _int_arg("page", 1, 1, 100000)
 
-        per_page = _int_arg(
+        page = int_arg(
+            "page",
+            1,
+            1,
+            100000,
+        )
+
+        per_page = int_arg(
             "per_page",
             DEFAULT_PER_PAGE,
             1,
@@ -219,14 +274,26 @@ def create_app(db=None, model_dir=None):
             clamp=True,
         )
 
-        poet_id = _int_arg("poet_id", None, 1)
-        tema = _choice_arg("tema", TEMA_LIST)
-        sort = _choice_arg("sort", list(repo.SORTS)) or "title"
+        poet_id = int_arg(
+            "poet_id",
+            None,
+            1,
+        )
+
+        tema = choice_arg(
+            "tema",
+            TEMA_LIST,
+        )
+
+        sort = (
+            choice_arg("sort", list(repo.SORTS))
+            or "title"
+        )
 
         return jsonify(
             repo.list_poems(
                 _db(),
-                q=_q_arg(),
+                q=q_arg(),
                 poet_id=poet_id,
                 tema=tema,
                 sort=sort,
@@ -235,29 +302,43 @@ def create_app(db=None, model_dir=None):
             )
         )
 
-    # --------------------------------------------------
+    # -----------------------------------------------------
     # DETAIL PUISI
-    # --------------------------------------------------
+    # -----------------------------------------------------
 
     @app.get("/api/poems/<int:poem_id>")
     def poem(poem_id):
-        result = repo.get_poem(_db(), poem_id)
+
+        result = repo.get_poem(
+            _db(),
+            poem_id,
+        )
 
         if result is None:
-            raise ApiError(404, "Puisi tidak ditemukan.")
+            raise ApiError(
+                404,
+                "Puisi tidak ditemukan.",
+            )
 
         return jsonify(result)
 
-    # --------------------------------------------------
+    # -----------------------------------------------------
     # ANALISIS PUISI DARI PERPUSTAKAAN
-    # --------------------------------------------------
+    # -----------------------------------------------------
 
     @app.get("/api/poems/<int:poem_id>/analysis")
     def poem_analysis(poem_id):
-        poem_data = repo.get_poem(_db(), poem_id)
+
+        poem_data = repo.get_poem(
+            _db(),
+            poem_id,
+        )
 
         if poem_data is None:
-            raise ApiError(404, "Puisi tidak ditemukan.")
+            raise ApiError(
+                404,
+                "Puisi tidak ditemukan.",
+            )
 
         result = analysis.analyze(
             poem_data["body"],
@@ -274,37 +355,46 @@ def create_app(db=None, model_dir=None):
 
         return jsonify(result)
 
-    # --------------------------------------------------
-    # ANALISIS TEKS DARI STUDIO PUISI
-    # --------------------------------------------------
+    # -----------------------------------------------------
+    # ANALISIS TEKS BARU DARI STUDIO PUISI
+    # -----------------------------------------------------
 
     @app.post("/api/analyze")
     def analyze():
+
         payload = request.get_json(silent=True)
 
-        if not isinstance(payload, dict) or not isinstance(
-            payload.get("text"), str
+        if (
+            not isinstance(payload, dict)
+            or not isinstance(payload.get("text"), str)
         ):
             raise ApiError(
                 400,
-                'Kirim JSON berbentuk {"text": "..."} .'
+                'Kirim JSON berbentuk {"text": "..."} .',
             )
 
         text = payload["text"].strip()
 
         if not text:
-            raise ApiError(400, "Teks puisi kosong.")
+            raise ApiError(
+                400,
+                "Teks puisi kosong.",
+            )
 
         if len(text) > MAX_TEXT:
             raise ApiError(
                 400,
-                f"Teks terlalu panjang (maksimal {MAX_TEXT} karakter)."
+                f"Teks terlalu panjang "
+                f"(maksimal {MAX_TEXT} karakter).",
             )
 
-        if not analysis.tokenize(text, stopwords=False):
+        if not analysis.tokenize(
+            text,
+            stopwords=False,
+        ):
             raise ApiError(
                 400,
-                "Teks tidak mengandung kata yang bisa dianalisis."
+                "Teks tidak mengandung kata yang bisa dianalisis.",
             )
 
         result = analysis.analyze(
@@ -312,13 +402,41 @@ def create_app(db=None, model_dir=None):
             app.config["MODEL_DIR"],
         )
 
+        # Hasil tema dan sentimen merupakan alat bantu,
+        # bukan penentu mutlak makna puisi.
+        result["catatan"] = (
+            "Prediksi tema dan analisis sentimen merupakan "
+            "alat bantu eksplorasi, bukan penentu mutlak "
+            "makna puisi."
+        )
+
         return jsonify(result)
+
+    # =====================================================
+    # BAGIAN 3: RUANG DIKSI
+    # =====================================================
+
+    # Endpoint berikut didaftarkan dari diksi_api.py.
+    # ApiError menggunakan kelas yang sama dengan API utama.
+
+    diksi_api.register(app)
+
+    # -----------------------------------------------------
+    # SELESAI
+    # -----------------------------------------------------
 
     return app
 
 
+# ---------------------------------------------------------
+# MENJALANKAN SERVER
+# ---------------------------------------------------------
+
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+
+    logging.basicConfig(
+        level=logging.INFO,
+    )
 
     create_app().run(
         host="127.0.0.1",
