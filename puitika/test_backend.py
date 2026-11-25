@@ -44,7 +44,8 @@ SCHEMA = """
 CREATE TABLE poets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
-    name_key TEXT NOT NULL UNIQUE
+    name_key TEXT NOT NULL UNIQUE,
+    period TEXT
 );
 
 CREATE TABLE poems (

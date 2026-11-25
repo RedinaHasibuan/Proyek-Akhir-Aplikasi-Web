@@ -34,6 +34,9 @@ Studio Puisi:
     DELETE /api/drafts/<id>
     POST   /api/studio/rekomendasi
 
+Dashboard Sastra:
+    GET    /api/dashboard?k=
+
 Hanya puisi dengan in_public_library = 1 yang dapat diakses melalui
 endpoint Perpustakaan. Draf Studio disimpan terpisah dan tidak menjadi
 puisi publik.
@@ -57,6 +60,7 @@ from werkzeug.exceptions import HTTPException
 
 import analysis
 import config
+import dashboard_api
 import diksi_api
 import diksi_repo
 import makna_api
@@ -276,6 +280,10 @@ def create_app(db=None, model_dir=None):
             TEMA_LIST,
         )
 
+        periode = (request.args.get("periode") or "").strip() or None
+        if periode and len(periode) > 60:
+            raise ApiError(400, "Parameter 'periode' maksimal 60 karakter.")
+
         sort = choice_arg("sort", list(repo.SORTS)) or "title"
 
         return jsonify(
@@ -284,6 +292,7 @@ def create_app(db=None, model_dir=None):
                 q=q_arg(),
                 poet_id=poet_id,
                 tema=tema,
+                periode=periode,
                 sort=sort,
                 page=page,
                 per_page=per_page,
@@ -386,6 +395,9 @@ def create_app(db=None, model_dir=None):
 
     # Studio Puisi: CRUD draf dan rekomendasi tema/diksi.
     studio_api.register(app)
+
+    # Dashboard Sastra: statistik korpus, distribusi tema/periode, dan clustering.
+    dashboard_api.register(app)
 
     return app
 

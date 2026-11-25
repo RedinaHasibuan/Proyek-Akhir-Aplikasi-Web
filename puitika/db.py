@@ -1,12 +1,9 @@
-
 """Lapisan akses database yang tipis.
 
 MySQL dipakai untuk aplikasi sungguhan (pengaturan dari config.py / environment variable).
-SQLite HANYA untuk uji otomatis (test_backend.py); skema SQLite dibuat di file uji itu.
-Semua SQL di proyek ini memakai placeholder %s; untuk SQLite diganti ke ? secara otomatis,
-jadi SQL harus tetap portabel (tanpa fitur khusus MySQL) dan tanpa tanda % di dalam teks SQL.
+SQLite HANYA untuk uji otomatis; skema SQLite dibuat di file uji.
+Semua SQL di proyek ini memakai placeholder %s; untuk SQLite diganti ke ? secara otomatis.
 """
-
 import sqlite3
 from contextlib import contextmanager
 
@@ -24,11 +21,11 @@ class _Cursor:
         return self
 
     def all(self):
-        return [dict(r) for r in self._cur.fetchall()]
+        return [dict(row) for row in self._cur.fetchall()]
 
     def one(self):
-        r = self._cur.fetchone()
-        return dict(r) if r else None
+        row = self._cur.fetchone()
+        return dict(row) if row else None
 
     @property
     def rowcount(self):
@@ -36,7 +33,7 @@ class _Cursor:
 
     @property
     def lastrowid(self):
-        """ID dari baris terakhir yang berhasil ditambahkan."""
+        """ID baris terakhir yang berhasil ditambahkan."""
         return self._cur.lastrowid
 
 
@@ -62,7 +59,7 @@ class Database:
             conn.execute("PRAGMA foreign_keys = ON")
             return conn
 
-        import pymysql  # diimpor di sini agar uji SQLite tidak butuh PyMySQL
+        import pymysql  # Diimpor di sini agar tes SQLite tidak membutuhkan PyMySQL.
 
         return pymysql.connect(
             host=config.DB_HOST,
@@ -77,7 +74,7 @@ class Database:
 
     @contextmanager
     def cursor(self, commit=False):
-        """Beri kursor. Dengan commit=True, perubahan disimpan bila blok selesai tanpa error."""
+        """Beri kursor. Commit dilakukan hanya bila commit=True dan blok sukses."""
         conn = self._connect()
         try:
             yield _Cursor(conn.cursor(), self.kind)
@@ -90,61 +87,72 @@ class Database:
             conn.close()
 
 
-def ensure_schema(db):
-    """Pastikan kolom poem_labels.is_primary ada (untuk DB yang dibuat dari schema.sql lama).
+# Migrasi tambahan yang aman dijalankan berulang kali.
+MIGRATIONS = [
+    (
+        "poem_labels",
+        "is_primary",
+        "ALTER TABLE poem_labels ADD COLUMN is_primary TINYINT(1) NOT NULL DEFAULT 1 AFTER label",
+    ),
+    (
+        "poets",
+        "period",
+        "ALTER TABLE poets ADD COLUMN period VARCHAR(60) NULL",
+    ),
+]
 
-    Aman dijalankan berulang. Mengembalikan True bila ada perubahan.
+
+def ensure_schema(db):
+    """Pastikan kolom tambahan yang dibutuhkan proyek tersedia.
+
+    Menambahkan poem_labels.is_primary dan poets.period bila belum ada.
+    Aman dipanggil berulang kali. Mengembalikan True bila ada perubahan.
+    SQLite tidak dimigrasikan oleh fungsi ini; skema SQLite disiapkan oleh tes.
     """
     if db.kind != "mysql":
         return False
 
+    changed = False
     with db.cursor(commit=True) as cur:
-        t = cur.execute(
-            "SELECT COUNT(*) AS n FROM information_schema.TABLES "
-            "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = 'poem_labels'",
-            (config.DB_NAME,),
-        ).one()
+        for table, column, ddl in MIGRATIONS:
+            table_exists = cur.execute(
+                "SELECT COUNT(*) AS n FROM information_schema.TABLES "
+                "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s",
+                (config.DB_NAME, table),
+            ).one()
+            if not table_exists or not table_exists["n"]:
+                raise RuntimeError(
+                    f"Tabel {table} belum ada. Jalankan dulu: python load_to_db.py --init"
+                )
 
-        if not t["n"]:
-            raise RuntimeError(
-                "Tabel poem_labels belum ada. Jalankan dulu: python load_to_db.py --init"
-            )
+            column_exists = cur.execute(
+                "SELECT COUNT(*) AS n FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND COLUMN_NAME = %s",
+                (config.DB_NAME, table, column),
+            ).one()
+            if not column_exists or not column_exists["n"]:
+                cur.execute(ddl)
+                changed = True
 
-        c = cur.execute(
-            "SELECT COUNT(*) AS n FROM information_schema.COLUMNS "
-            "WHERE TABLE_SCHEMA = %s "
-            "AND TABLE_NAME = 'poem_labels' AND COLUMN_NAME = 'is_primary'",
-            (config.DB_NAME,),
-        ).one()
-
-        if c["n"]:
-            return False
-
-        cur.execute(
-            "ALTER TABLE poem_labels "
-            "ADD COLUMN is_primary TINYINT(1) NOT NULL DEFAULT 1 AFTER label"
-        )
-        return True
+    return changed
 
 
 def apply_sql_file(db, path):
-    """Menjalankan file SQL sederhana yang berisi beberapa pernyataan.
+    """Jalankan file SQL sederhana; pernyataan dipisahkan dengan titik koma.
 
-    Pernyataan dipisahkan berdasarkan titik koma (;).
-    Baris komentar yang diawali tanda -- akan dilewati.
+    Baris komentar yang diawali -- dilewati. File SQL harus berupa DDL sederhana,
+    tanpa titik koma di dalam literal string atau stored procedure.
     """
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as file:
         lines = [
             line
-            for line in f.read().splitlines()
+            for line in file.read().splitlines()
             if not line.strip().startswith("--")
         ]
 
-    sql_text = "\n".join(lines)
-
     statements = [
         statement.strip()
-        for statement in sql_text.split(";")
+        for statement in "\n".join(lines).split(";")
         if statement.strip()
     ]
 
