@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#42250B">
+  <meta name="description" content="Puitika — ruang membaca, menulis, dan menimbang kata dalam puisi Indonesia.">
+  <title>Puitika — Ruang Sastra Indonesia</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='10' fill='%2342250B'/%3E%3Cpath d='M10 11h9a7 7 0 0 1 0 14h-9zm0 14v6' fill='none' stroke='%23F5F1EA' stroke-width='2.5' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;600&family=Lora:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500;1,600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/app/css/style.css">
+</head>
+<body>
+  <div class="paper-grain" aria-hidden="true"></div>
+  <header class="mobile-bar" id="mobile-bar">
+    <a class="mobile-brand" href="#/" aria-label="Puitika, kembali ke beranda">
+      <span class="mobile-brand-mark" aria-hidden="true">P</span>
+      <span><strong>Puitika</strong><small>ruang baca &amp; olah kata</small></span>
+    </a>
+    <button class="mobile-menu-toggle" id="mobile-nav-toggle" type="button" aria-label="Buka menu navigasi" aria-controls="primary-rail" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
+  </header>
+  <button class="rail-backdrop" id="rail-backdrop" type="button" aria-label="Tutup navigasi"></button>
+  <div class="shell">
+    <aside class="rail" id="primary-rail" aria-label="Navigasi Puitika">
+      <a class="brand" href="#/" aria-label="Puitika, kembali ke beranda">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 40 40" fill="none">
+            <path d="M9 10h11a8 8 0 0 1 0 16H9V10Z" stroke="currentColor" stroke-width="1.8"/>
+            <path d="M9 26v5m4-5v5m7-15h7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            <path d="M27 8v7m-3.5-3.5h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <span class="brand-copy">
+          <strong>Puitika</strong>
+          <small>ruang baca &amp; olah kata</small>
+        </span>
+      </a>
+
+      <div class="rail-intro">
+        <span class="rail-kicker">ARSIP SASTRA INDONESIA</span>
+        <p>Puisi, diksi, dan makna dalam satu ruang.</p>
+      </div>
+
+      <div class="nav-caption">JELAJAHI RUANG</div>
+      <nav class="nav" aria-label="Menu utama" id="nav"></nav>
+
+    </aside>
+
+    <main class="main">
+      <header class="main-topbar">
+        <div class="topbar-start">
+          <button class="desktop-menu-toggle" id="desktop-nav-toggle" type="button" aria-label="Sembunyikan menu navigasi" aria-controls="primary-rail" aria-expanded="true">
+            <span></span><span></span><span></span>
+          </button>
+          <div class="topbar-heading">
+            <span class="topbar-kicker">RUANG BACA DIGITAL</span>
+            <span class="topbar-title" id="topbar-title">Beranda</span>
+          </div>
+        </div>
+        <div class="topbar-meta">
+          <span class="season-mark" aria-hidden="true">✳</span>
+          <span>Tempat kata-kata menemukan maknanya</span>
+        </div>
+      </header>
+      <div class="main-content" id="main" tabindex="-1"></div>
+      <footer class="main-footer">
+        <span><strong>Puitika</strong> · Ruang membaca, menulis, dan menimbang kata.</span>
+        <span class="footer-hand">Dirangkai dengan hangat, dibaca perlahan.</span>
+      </footer>
+    </main>
+  </div>
+  <noscript><p class="noscript">Puitika membutuhkan JavaScript agar fitur pencarian dan analisis dapat digunakan.</p></noscript>
+  <script type="module" src="/app/js/app.js"></script>
+</body>
+</html>

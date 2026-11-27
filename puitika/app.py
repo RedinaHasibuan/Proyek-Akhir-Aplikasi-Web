@@ -55,7 +55,7 @@ Environment variable opsional:
 import logging
 import os
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from werkzeug.exceptions import HTTPException
 
 import analysis
@@ -83,6 +83,21 @@ DEFAULT_PER_PAGE = 12
 MAX_TEXT = analysis.MAX_CHARS
 
 log = logging.getLogger("puitika")
+FRONTEND_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "frontend",
+)
+
+CSP = (
+    "default-src 'self'; "
+    "style-src 'self' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com data:; "
+    "img-src 'self' data:; "
+    "object-src 'none'; "
+    "base-uri 'none'; "
+    "frame-ancestors 'none'; "
+    "form-action 'self'"
+)
 
 
 # ---------------------------------------------------------------------
@@ -90,8 +105,13 @@ log = logging.getLogger("puitika")
 # ---------------------------------------------------------------------
 
 def create_app(db=None, model_dir=None):
-    app = Flask(__name__)
+    app = Flask(
+    __name__,
+    static_folder=FRONTEND_DIR,
+    static_url_path="/app",
+    )
 
+    app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
     app.json.ensure_ascii = False
     app.json.sort_keys = False
 
@@ -101,6 +121,35 @@ def create_app(db=None, model_dir=None):
 
     def _db():
         return app.config["DB"]
+    @app.after_request
+    def _frontend_security_headers(response):
+        response.headers.setdefault(
+            "X-Content-Type-Options",
+            "nosniff",
+        )
+
+        if not request.path.startswith("/api/"):
+            response.headers.setdefault(
+                "Content-Security-Policy",
+                CSP,
+            )
+            response.headers.setdefault(
+                "Referrer-Policy",
+                "no-referrer",
+            )
+
+        return response
+
+    @app.get("/")
+    def index():
+        index_path = os.path.join(FRONTEND_DIR, "index.html")
+
+        if not os.path.isfile(index_path):
+            return jsonify(
+                error="Frontend belum tersedia."
+            ), 404
+
+        return send_from_directory(FRONTEND_DIR, "index.html")
 
     # -----------------------------------------------------------------
     # SIAPKAN TABEL STUDIO PUISI
